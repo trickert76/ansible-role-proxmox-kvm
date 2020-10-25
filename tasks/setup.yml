@@ -1,0 +1,264 @@
+---
+- name: "Make assertions about the new VM"
+  assert:
+    that:
+      - "pve_api_host is defined"
+      - "pve_api_username is defined"
+      - "pve_api_password is defined"
+      - "pve_node is defined"
+      - "pve_guest is defined"
+      - "domain is defined"
+      - "pve_guest_network_interface is defined"
+      - "ntp_area is defined"
+      - "ntp_timezone is defined"
+      - "pve_guest_locale is defined"
+      - "pve_guest_keymap is defined"
+      - "pve_guest_mirror_host is defined"
+      - "pve_guest_mirror_path is defined"
+      - "pve_guest_mirror_suite is defined"
+      - "users is defined"
+      - "users.root is defined"
+      - "users.root.password is defined"
+      - "net_ipv4 is defined"
+      - "net_ipv6 is defined"
+    success_msg: "All asserts are ok"
+
+- name: "Make assertions about IPv4"
+  assert:
+    that:
+      - "net_ipv4_address is defined"
+      - "net_ipv4_netmask is defined"
+      - "net_ipv4_gateway is defined"
+      - "net_ipv4_dns is defined"
+  when: "net_ipv4 == 'static'"
+
+- name: "Make assertions about IPv6"
+  assert:
+    that:
+      - "net_ipv6_address is defined"
+      - "net_ipv6_prefix is defined"
+      - "net_ipv6_gateway is defined"
+      - "net_ipv6_dns is defined"
+  when: "net_ipv6 == 'static'"
+
+- name: Create Debian Installer directory on host
+  file:
+    path: "{{ pve_kvm_install_dir }}/{{ pve_guest }}/tmp"
+    state: directory
+    owner: root
+    group: root
+    mode: 0755
+  delegate_to: "{{ pve_api_host }}"
+
+- name: Update Debian-Installer files
+  get_url:
+    url: "http://ftp.de.debian.org/debian/dists/stretch/main/installer-amd64/current/images/netboot/debian-installer/amd64/{{ item }}"
+    dest: "{{ pve_kvm_install_dir }}/"
+  with_items:
+    - linux
+    - initrd.gz
+  delegate_to: "{{ pve_api_host }}"
+
+- name: "Copy Debian preseed file for VM {{ pve_guest }}"
+  template:
+    src: "preseed.cfg.j2"
+    dest: "{{ pve_kvm_install_dir }}/{{ pve_guest }}/{{ item }}"
+    owner: root
+    group: root
+    mode: 0644
+  with_items:
+    - "preseed.cfg"
+    - "tmp/preseed.cfg"
+  delegate_to: "{{ pve_api_host }}"
+
+- name: "Unpack initrd.gz for VM {{ pve_guest }}"
+  shell: "gunzip -c {{ pve_kvm_install_dir }}/initrd.gz | cpio -i"
+  args:
+    chdir: "{{ pve_kvm_install_dir }}/{{ pve_guest }}/tmp"
+    creates: "{{ pve_kvm_install_dir }}/{{ pve_guest }}/tmp/init"
+  delegate_to: "{{ pve_api_host }}"
+
+- name: "Build new initrd.gz for VM {{ pve_guest }}"
+  shell: "find . | cpio -H newc -o | gzip -9 >{{ pve_kvm_install_dir }}/{{ pve_guest }}/initrd.gz"
+  args:
+    chdir: "{{ pve_kvm_install_dir }}/{{ pve_guest }}/tmp"
+    creates: "{{ pve_kvm_install_dir }}/{{ pve_guest }}/initrd.gz"
+  delegate_to: "{{ pve_api_host }}"
+
+- name: "Cleanup initrd.gz tmp files from VM {{ pve_guest }}"
+  file:
+    path: "{{ pve_kvm_install_dir }}/{{ pve_guest }}/tmp"
+    state: absent
+  delegate_to: "{{ pve_api_host }}"
+
+- name: "Get next VM ID"
+  command: "pvesh get /cluster/nextid"
+  check_mode: false
+  changed_when: false
+  register: __pve_next_vmid
+  delegate_to: "{{ pve_api_host }}"
+
+- name: "Set VM ID for {{ pve_guest }} = {{ __pve_next_vmid.stdout }}"
+  set_fact:
+    pve_vmid: "{{ __pve_next_vmid.stdout }}"
+
+- name: "Create VM {{ pve_guest }}"
+  proxmox_kvm:
+    api_user: '{{ pve_api_username }}'
+    api_password: '{{ pve_api_password }}'
+    api_host: '{{ pve_api_host }}'
+    vmid: '{{ pve_vmid }}'
+    node: '{{ pve_node }}'
+    name: '{{ pve_guest }}'
+    agent: '{{ pve_guest_agent }}'
+    ostype: '{{ pve_guest_ostype }}'
+    cores: '{{ pve_guest_cores }}'
+    cpu: '{{ pve_guest_coretype }}'
+    memory: '{{ pve_guest_memory }}'
+    state: 'present'
+    scsihw: 'virtio-scsi-pci'
+    scsi: '{"scsi0":"{{ pve_guest_volume_storage }}:{{ pve_guest_volume_size }},format=qcow2"}'
+    bootdisk: 'scsi0'
+    net: '{"net0":"virtio,bridge=vmbr0,firewall=0"}'
+    args: '-serial unix:/var/run/qemu-server/{{ pve_vmid }}.serial,server,nowait -kernel {{ pve_kvm_install_dir }}/linux -initrd {{ pve_kvm_install_dir }}/{{ pve_guest }}/initrd.gz -no-reboot'
+  notify: sleep
+  register: __pve_vm_created
+  delegate_to: "{{ pve_api_host }}"
+
+- name: "Installing OS on {{ pve_guest }}"
+  block:
+  - meta: flush_handlers
+  - name: "Start installation on VM {{ pve_guest }}"
+    proxmox_kvm:
+      api_user: '{{ pve_api_username }}'
+      api_password: '{{ pve_api_password }}'
+      api_host: '{{ pve_api_host }}'
+      vmid: '{{ pve_vmid }}'
+      node: '{{ pve_node }}'
+      name: '{{ pve_guest }}'
+      cores: '{{ pve_guest_cores }}'
+      cpu: '{{ pve_guest_coretype }}'
+      memory: '{{ pve_guest_memory }}'
+      state: 'started'
+    notify: sleep
+    delegate_to: "{{ pve_api_host }}"
+  - meta: flush_handlers
+
+  when: "__pve_vm_created.changed"
+  
+- name: "Remove deploy args from VM {{ pve_guest }}"
+  proxmox_kvm:
+    api_user: '{{ pve_api_username }}'
+    api_password: '{{ pve_api_password }}'
+    api_host: '{{ pve_api_host }}'
+    vmid: '{{ pve_vmid }}'
+    node: '{{ pve_node }}'
+    name: '{{ pve_guest }}'
+    cores: '{{ pve_guest_cores }}'
+    cpu: '{{ pve_guest_coretype }}'
+    memory: '{{ pve_guest_memory }}'
+    args: '-serial unix:/var/run/qemu-server/{{ pve_vmid }}.serial,server,nowait'
+    update: yes
+  when: __pve_vm_created.changed
+  delegate_to: "{{ pve_api_host }}"
+
+- name: "Get PID from installation on VM {{ pve_guest }}"
+  slurp:
+    src: "/var/run/qemu-server/{{ pve_vmid }}.pid"
+  register: __pve_vm_pidfile
+  delegate_to: "{{ pve_api_host }}"
+
+- set_fact:
+    pve_vm_pid: "{{ __pve_vm_pidfile['content'] | b64decode | trim }}"
+
+ # Unfortunately, pidfile in /var/run/qemu-server/ is not cleaned up when VM
+ # halts. Thus we have to wait for the /proc/<PID>/status to disappear.
+- name: "Wait for VM to be halted after installation"
+  wait_for:
+    path: "/proc/{{ pve_vm_pid }}/status"
+    state: absent
+    delay: 60
+    timeout: 900
+  when: __pve_vm_created.changed
+  delegate_to: "{{ pve_api_host }}"
+
+- name: "Cleanup initrd.gz files from VM {{ pve_guest }}"
+  file:
+    path: "{{ pve_kvm_install_dir }}/{{ pve_guest }}"
+    state: absent
+  delegate_to: "{{ pve_api_host }}"
+
+
+- name: "Start VM {{ pve_guest }}"
+  proxmox_kvm:
+    api_user: '{{ pve_api_username }}'
+    api_password: '{{ pve_api_password }}'
+    api_host: '{{ pve_api_host }}'
+    vmid: '{{ pve_vmid }}'
+    node: '{{ pve_node }}'
+    name: '{{ pve_guest }}'
+    cores: '{{ pve_guest_cores }}'
+    cpu: '{{ pve_guest_coretype }}'
+    memory: '{{ pve_guest_memory }}'
+    state: 'started'
+  when: __pve_vm_created.changed
+  delegate_to: "{{ pve_api_host }}"
+
+- name: "Wait for VM is ready"
+  pause:
+    seconds: 15
+  when: __pve_vm_created.changed
+
+- name: "Use IPv6"
+  set_fact:
+    pve_guest_ip: "[{{ net_ipv6_address }}]"
+  when: "net_ipv6 == 'static'"
+- name: "Use IPv4"
+  set_fact:
+    pve_guest_ip: "{{ net_ipv4_address }}"
+  when: "net_ipv4 == 'static'"
+
+# the autoinstaller is only able to configure IPv4 or IPv6 (preseed allows only one of it)
+- name: "Copy new network configuration for VM {{ pve_guest }} to fix Preseed Bug for Dualstack IPv4/6"
+  block:
+  - name: "Create temporary file"
+    local_action:
+      module: tempfile
+      state: file
+      suffix: interface
+    register: interface_tempfile
+  - name: "Create new interface file for VM {{ pve_guest }}"
+    local_action:
+      module: template
+      src: "interfaces.j2"
+      dest: "{{ interface_tempfile.path }}"
+  - name: "Override wrong generated interfaces in VM {{ pve_guest }} to fix Preseed Bug for Dualstack IPv4/6"
+    local_action:
+      module: command
+      cmd: scp -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -P {{ ansible_port }} "{{ interface_tempfile.path }}" root@{{ pve_guest_ip }}:/etc/network/interfaces
+    changed_when: false
+  - name: "Reboot VM {{ pve_guest }} to fix Preseed Bug for Dualstack IPv4/6"
+    local_action:
+      module: command
+      cmd: ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -p {{ ansible_port }} root@{{ pve_guest_ip }} reboot
+    changed_when: false
+    ignore_errors: yes
+  - name: "Wait for VM is ready"
+    pause:
+      seconds: 15
+  when: "__pve_vm_created.changed and (net_ipv4 == 'static' or net_ipv4 == 'dhcp') and (net_ipv6 == 'static' or net_ipv6 == 'auto')"
+
+- name: "Read VM {{ pve_guest }} host key"
+  local_action:
+    module: command
+    cmd: ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -p {{ ansible_port }} root@{{ pve_guest_ip }} cat /etc/ssh/ssh_host_ecdsa_key.pub
+  changed_when: false
+  failed_when: false
+  ignore_errors: yes
+  register: pve_guest_hostkey
+
+- name: "Set SSH Hostkey for {{ pve_guest }} on localhost"
+  local_action:
+    module: known_hosts
+    name: "{{ pve_guest }}"
+    key: "{{ pve_guest}},{{ pve_guest_ip}} {{ pve_guest_hostkey.stdout }}"

@@ -1,0 +1,36 @@
+## {{ ansible_managed }}
+
+source /etc/network/interfaces.d/*
+
+# The loopback network interface
+auto lo
+iface lo inet loopback
+
+# The primary network interface
+allow-hotplug {{ pve_guest_network_interface }}
+
+{% if net_ipv4 == 'static' %}
+# IPv4 static
+iface {{ pve_guest_network_interface }} inet static
+  address {{ net_ipv4_address }}
+  netmask {{ net_ipv4_netmask }}
+  gateway {{ net_ipv4_gateway }}
+  dns-nameservers {{ net_ipv4_dns }}
+  dns-search {{ domain }}
+{% elif net_ipv4 == 'dhcp' %}
+# IPv4 dhcp
+iface {{ pve_guest_network_interface }} inet dhcp
+{% endif %}
+
+{% if net_ipv6 == 'static' %}
+# IPv6 static
+iface {{ pve_guest_network_interface }} inet6 static
+  address {{ net_ipv6_address }}
+  netmask {{ net_ipv6_prefix }}
+  gateway {{ net_ipv6_gateway }}
+  dns-nameservers {{ net_ipv6_dns }}
+  dns-search {{ domain }}
+{% elif net_ipv6 == 'auto' %}
+# IPv6 auto
+iface {{ pve_guest_network_interface }} inet6 auto
+{% endif %}

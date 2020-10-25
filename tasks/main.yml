@@ -1,0 +1,27 @@
+- name: "Define Proxmox host"
+  set_fact:
+    pve_api_host: "{{ groups[pve_guest_hostgroup] | first }}"
+    pve_node: "{{ pve_guest_host | default(groups[pve_guest_hostgroup]) | first }}"
+    pve_guest: "{{ inventory_hostname }}"
+
+- name: "Validate VM exists on Proxmox Host"
+  proxmox_kvm:
+    api_user: "{{ pve_api_username }}"
+    api_password: "{{ pve_api_password }}"
+    api_host: "{{ pve_api_host }}"
+    name: "{{ pve_guest }}"
+    state: current
+  delegate_to: "{{ pve_api_host }}"
+  ignore_errors: true
+  register: kvm_state
+
+- name: "Install KVM {{ pve_guest }} on {{ pve_node }} via API host {{ pve_api_host }}"
+  include_tasks: setup.yml
+  when: "kvm_state.failed|bool"
+
+- setup: # aka gather facts
+
+- name: "Install common necessary KVM Debian packages"
+  apt:
+    name: ['qemu-guest-agent']
+    state: present

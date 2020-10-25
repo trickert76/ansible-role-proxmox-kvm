@@ -1,0 +1,121 @@
+#### Contents of the preconfiguration file (for buster)
+### Localization
+d-i debian-installer/locale string {{ pve_guest_locale }}
+d-i keyboard-configuration/xkb-keymap select {{ pve_guest_keymap }}
+
+### Network configuration
+d-i netcfg/enable boolean true
+d-i netcfg/choose_interface select auto
+d-i netcfg/dhcp_timeout string 10
+d-i netcfg/dhcpv6_timeout string 10
+
+# Static network configuration.
+#
+{% if net_ipv4 == 'static' %}
+# IPv4 static setup
+d-i netcfg/disable_autoconfig boolean true
+d-i netcfg/get_ipaddress string {{ net_ipv4_address }}
+d-i netcfg/get_netmask string {{ net_ipv4_netmask }}
+d-i netcfg/get_gateway string {{ net_ipv4_gateway }}
+d-i netcfg/get_nameservers string {{ net_ipv4_dns }}
+d-i netcfg/confirm_static boolean true
+{% elif net_ipv6 == 'static' %}
+# IPv6 static setup
+d-i netcfg/disable_autoconfig boolean true
+d-i netcfg/get_ipaddress string {{ net_ipv6_address }}
+d-i netcfg/get_netmask string {{ net_ipv6_prefix }}
+d-i netcfg/get_gateway string {{ net_ipv6_gateway }}
+d-i netcfg/get_nameservers string {{ net_ipv6_dns }}
+d-i netcfg/confirm_static boolean true
+{% elif net_ipv4 == 'dhcp' %}
+# IPv4 dhcp setup
+{% elif net_ipv6 == 'auto' %}
+# IPv6 dhcp setup
+{% else %}
+# No IPv4/v6 setup available
+{% endif %}
+
+d-i netcfg/get_hostname string {{ pve_guest }}
+d-i netcfg/get_domain string {{ domain }}
+d-i netcfg/hostname string {{ pve_guest }}
+
+# Disable that annoying WEP key dialog.
+d-i netcfg/wireless_wep string
+
+### Mirror settings
+# If you select ftp, the mirror/country string does not need to be set.
+d-i mirror/country string manual
+d-i mirror/http/hostname string {{ pve_guest_mirror_host }}
+d-i mirror/http/directory string {{ pve_guest_mirror_path }}
+d-i mirror/http/proxy string
+d-i mirror/suite string {{ pve_guest_mirror_suite }}
+
+### Account setup
+d-i passwd/make-user boolean false
+
+# Root password encrypted using a crypt(3) hash.
+d-i passwd/root-password-crypted password {{ users.root.password }}
+
+### Clock and time zone setup
+d-i clock-setup/utc boolean true
+d-i time/zone string {{ ntp_timezone }}
+d-i clock-setup/ntp boolean true
+d-i clock-setup/ntp-server string 0.{{ ntp_area }}.pool.ntp.org
+
+### Partitioning
+d-i partman-auto/disk string /dev/sda
+d-i partman-auto/method string regular
+d-i partman-lvm/device_remove_lvm boolean true
+d-i partman-md/device_remove_md boolean true
+d-i partman-lvm/confirm boolean true
+d-i partman-lvm/confirm_nooverwrite boolean true
+
+d-i partman-basicfilesystems/no_swap boolean false
+d-i partman-auto/expert_recipe string                         \
+      myroot    ::                                            \
+              1000 50 -1 ext4                                     \
+                      $primary{ } $bootable{ }                \
+                      method{ format } format{ }              \
+                      use_filesystem{ } filesystem{ ext4 }    \
+                      mountpoint{ / }                         \
+              .
+d-i partman-auto/choose_recipe select myroot
+
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+
+### Apt setup
+d-i apt-setup/non-free boolean true
+d-i apt-setup/contrib boolean true
+d-i apt-setup/services-select multiselect security, updates
+
+### Package selection
+tasksel tasksel/first multiselect standard
+
+d-i pkgsel/include string openssh-server build-essential qemu-guest-agent python3 python3-minimal
+d-i pkgsel/upgrade select full-upgrade
+
+popularity-contest popularity-contest/participate boolean false
+
+### Boot loader installation
+d-i grub-installer/only_debian boolean true
+d-i grub-installer/with_other_os boolean true
+d-i grub-installer/bootdev  string /dev/sda
+
+#### Advanced options
+d-i preseed/late_command string \
+ mkdir -p /target/root/.ssh; \
+{% if users.root.allowed_keys is defined %}
+{% for key in users.root.allowed_keys %}
+ echo '{{ key.type }} {{ key.pubkey }} {{ key.name }}' >> /target/root/.ssh/authorized_keys ; \
+{% endfor %}
+{% endif %}
+ chown -R root:root /target/root/.ssh/ ; \
+ sed 's/#Port 22/Port {{ ansible_port }}/g' -i /target/etc/ssh/sshd_config
+
+### Finishing up the installation
+d-i finish-install/reboot_in_progress note
+#d-i debian-installer/exit/halt boolean true
+#d-i debian-installer/exit/poweroff boolean true

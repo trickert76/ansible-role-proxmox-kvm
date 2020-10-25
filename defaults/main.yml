@@ -1,0 +1,20 @@
+---
+pve_guest_agent: "yes"
+pve_guest_ostype: "l26" 
+pve_guest_cores: "2"
+pve_guest_coretype: "host"
+pve_guest_memory: "4096"
+pve_guest_volume_storage: "local"
+pve_guest_volume_size: "32"
+pve_guest_network_interface: "ens18"
+pve_guest_locale: "de_DE"
+pve_guest_keymap: "de"
+pve_guest_mirror_host: "deb.debian.org"
+pve_guest_mirror_path: "/debian/"
+pve_guest_mirror_suite: "buster"
+
+pve_kvm_install_dir: "/var/lib/vz/installer"
+
+
+# name of Ansible group which contains all Proxmox hosts
+pve_guest_hostgroup: "proxmox"
